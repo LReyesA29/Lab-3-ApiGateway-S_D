@@ -14,6 +14,7 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -37,10 +38,10 @@ public class DetalleController {
     private static final String CAMPO_LISTA_INSCRIPCIONES = "data";
 
     // Rutas de cada microservicio consumidas por este endpoint
-    private static final String RUTA_ESTUDIANTE = "/api/estudiantes/%d";
-    private static final String RUTA_INSCRIPCIONES_POR_ESTUDIANTE = "/api/inscripciones?estudianteId=%d";
-    private static final String RUTA_CURSO = "/api/cursos/%s";
-    private static final String RUTA_DOCENTE = "/api/docentes/%s";
+    private static final String RUTA_ESTUDIANTE = "/api/estudiantes/%s";
+    private static final String RUTA_INSCRIPCIONES_POR_ESTUDIANTE = "/api/inscripciones?estudianteId=%s";
+    private static final String RUTA_CURSO = "/api/materias/cursos/%s";
+    private static final String RUTA_DOCENTE = "/api/materias/docentes/%s";
 
     @Autowired
     private RutasConfig rutasConfig;
@@ -49,7 +50,7 @@ public class DetalleController {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @GetMapping("/api/estudiantes/{id}/detalle")
-    public ResponseEntity<?> detalle(@PathVariable int id) {
+    public ResponseEntity<?> detalle(@PathVariable String id) {
         try {
             // 1. Estudiante — se usa tal cual, no se le agrega nada
             JsonNode estudiante = obtenerJson(
@@ -81,7 +82,18 @@ public class DetalleController {
             resultado.set("estudiante", estudiante);
             resultado.set("inscripciones", listaInscripciones);
 
-            return ResponseEntity.ok(resultado);
+            // Spring Boot 4 usa Jackson 3 (tools.jackson) para serializar la
+            // respuesta HTTP, pero este ObjectNode es del Jackson 2 clasico
+            // (com.fasterxml.jackson) que trajimos de vuelta para JJWT. Jackson 3
+            // no reconoce el ObjectNode de Jackson 2 como arbol JSON y lo serializa
+            // como si fuera un bean cualquiera (con sus propios getters isArray,
+            // isBoolean, etc.), no como los datos reales. Convertirlo aqui a un
+            // LinkedHashMap plano evita el problema: un Map/List comun lo serializa
+            // bien cualquier version de Jackson.
+            LinkedHashMap<String, Object> resultadoPlano =
+                    mapper.treeToValue(resultado, LinkedHashMap.class);
+
+            return ResponseEntity.ok(resultadoPlano);
 
         } catch (HttpStatusCodeException ex) {
             // Uno de los módulos respondió con error propio (ej. estudiante no existe)

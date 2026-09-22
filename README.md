@@ -10,13 +10,13 @@ enrutamiento, la autenticación y la composición de datos entre ellos.
 ```
                     ┌────────────────────┐
    Cliente  ──────► │     API Gateway     │
-                    │      (puerto 8080)  │
+                    │      (puerto 3000)  │
                     └──────────┬─────────┘
                                │
             ┌──────────────────┼──────────────────┐
             ▼                  ▼                  ▼
      Estudiantes           Materias          Inscripciones
-     (puerto 8081)       (puerto 8082)        (puerto 8083)
+     (puerto 3001)       (puerto 3002)        (puerto 3003)
 ```
 
 Cada microservicio es un proyecto independiente, con su propia base de datos y
@@ -46,11 +46,11 @@ Las URLs de los microservicios y los parámetros del JWT se definen en
 `src/main/resources/application.properties`:
 
 ```properties
-server.port=8080
+server.port=3000
 
-modulos.estudiantes.url=http://localhost:8081
-modulos.materias.url=http://localhost:8082
-modulos.inscripciones.url=http://localhost:8083
+modulos.estudiantes.url=http://localhost:3001
+modulos.materias.url=http://localhost:3002
+modulos.inscripciones.url=http://localhost:3003
 
 jwt.secreto=<clave de al menos 32 caracteres>
 jwt.expiracion-minutos=60
@@ -62,7 +62,7 @@ jwt.expiracion-minutos=60
 mvn spring-boot:run
 ```
 
-El servicio queda disponible en `http://localhost:8080`.
+El servicio queda disponible en `http://localhost:3000`.
 
 ## Autenticación
 
@@ -70,7 +70,7 @@ Todas las rutas bajo `/api/**`, excepto el login, requieren un token JWT.
 
 **Obtener un token:**
 ```bash
-curl -X POST http://localhost:8080/api/auth/login \
+curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"usuario":"admin","clave":"admin123"}'
 ```
@@ -82,7 +82,7 @@ Respuesta:
 
 **Usarlo en las siguientes peticiones:**
 ```bash
-curl http://localhost:8080/api/estudiantes/1 \
+curl http://localhost:3000/api/estudiantes/1 \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -104,7 +104,7 @@ código y cuerpo se devuelven sin modificar. Si el microservicio no responde
 (caído, tiempo de espera agotado), el Gateway responde `502 Bad Gateway`:
 
 ```json
-{ "error": "Servicio no disponible: http://localhost:8081" }
+{ "error": "Servicio no disponible: http://localhost:3001" }
 ```
 
 ## Endpoint de composición
@@ -120,8 +120,8 @@ tres microservicios y devuelve la información combinada en una sola respuesta.
 
 1. `GET /api/estudiantes/{id}` — datos del estudiante
 2. `GET /api/inscripciones?estudianteId={id}` — inscripciones del estudiante (con sus notas)
-3. Por cada inscripción: `GET /api/cursos/{cursoId}` — datos del curso
-4. Por cada curso: `GET /api/docentes/{docenteId}` — datos del docente
+3. Por cada inscripción: `GET /api/materias/cursos/{cursoId}` — datos del curso
+4. Por cada curso: `GET /api/materias/docentes/{docenteId}` — datos del docente
 5. El Gateway ensambla el resultado final
 
 **Respuesta:**
@@ -129,23 +129,49 @@ tres microservicios y devuelve la información combinada en una sola respuesta.
 ```json
 {
   "estudiante": {
-    "id": 12,
-    "nombre": "Laura Gómez",
-    "programa": "Ingeniería de Sistemas"
+    "_id": "6501f8a2c9d4e5f6a7b8c9d0",
+    "nombre": "Laura",
+    "apellido": "Gómez",
+    "correo": "laura.gomez@ejemplo.com",
+    "fecha_nacimiento": "2003-05-20T00:00:00.000Z",
+    "programa": {
+      "_id": "60d5ec49f1b2c8b1f8e4e1a1",
+      "nombre": "Ingeniería de Sistemas y Computación",
+      "codigo": "ISC-01",
+      "facultad": "Facultad de Ingeniería"
+    },
+    "contacto": {
+      "telefono": "3001234567",
+      "direccion": "Calle 10 #5-30",
+      "ciudad": "Sogamoso"
+    }
   },
   "inscripciones": [
     {
-      "id": "6501f...",
+      "_id": "6501f8a2c9d4e5f6a7b8c9d1",
+      "id": "6501f8a2c9d4e5f6a7b8c9d1",
+      "estudianteId": "6501f8a2c9d4e5f6a7b8c9d0",
+      "cursoId": "1",
       "periodo": "2026-2",
       "estado": "activa",
       "curso": {
-        "id": 7,
+        "id": 1,
+        "materiaId": 1,
         "materiaNombre": "Sistemas Distribuidos",
-        "horario": "Lunes y Miércoles 8:00-10:00",
+        "docenteId": 1,
+        "horario": "Lunes y Miércoles 14:00-16:00",
+        "periodo": "2026-2",
+        "cupo": 30,
+        "aula": "Laboratorio 204",
+        "modalidad": "PRESENCIAL",
+        "estado": "ACTIVO",
         "docente": {
-          "id": 3,
-          "nombres": "Andrés",
-          "apellidos": "Vargas"
+          "id": 1,
+          "nombres": "Carlos Andrés",
+          "apellidos": "Ramírez López",
+          "correoInstitucional": "carlos.ramirez@uptc.edu.co",
+          "especialidad": "Sistemas Distribuidos y Cloud Computing",
+          "activo": true
         }
       },
       "notas": [
@@ -156,6 +182,12 @@ tres microservicios y devuelve la información combinada en una sola respuesta.
   ]
 }
 ```
+
+> Nota: `estudiante.programa`, `inscripciones[].curso` y `curso.docente` vienen
+> completos porque el Gateway hace `populate`/composición sobre cada uno — no
+> son solo el ID de referencia. Los ids de `curso`/`docente` son numéricos
+> (vienen de Materias, PostgreSQL); los de `estudiante`/`inscripcion` son
+> ObjectId de MongoDB (string de 24 caracteres).
 
 **Errores:**
 
