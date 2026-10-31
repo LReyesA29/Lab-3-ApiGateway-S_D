@@ -3,6 +3,7 @@ package com.example.gateway.controller;
 import com.example.gateway.config.RutasConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -18,18 +19,22 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Endpoint de composicion (patron Backend for Frontend). Orquesta llamadas HTTP a
- * los tres microservicios y devuelve un unico JSON con la informacion combinada
- * de un estudiante: sus datos, sus inscripciones, el curso de cada una y el
- * docente de cada curso.
+ * Endpoints de composicion (patron Backend for Frontend). Orquestan llamadas HTTP
+ * a los tres microservicios y devuelven un unico JSON con la informacion combinada:
+ * uno arma el detalle de un estudiante (sus inscripciones, el curso de cada una y
+ * el docente de cada curso), el otro arma el detalle de un curso en la direccion
+ * opuesta (su docente y los estudiantes inscritos en el).
  *
- * El contrato de entrada/salida de este endpoint esta documentado en el README.
+ * El contrato de entrada/salida de estos endpoints esta documentado en el README.
  */
 @RestController
 public class DetalleController {
 
     // Nombre del campo dentro de cada inscripción que trae el id del curso
     private static final String CAMPO_CURSO_ID = "cursoId";
+
+    // Nombre del campo dentro de cada inscripción que trae el id del estudiante
+    private static final String CAMPO_ESTUDIANTE_ID = "estudianteId";
 
     // Nombre del campo dentro de cada curso que trae el id del docente
     private static final String CAMPO_DOCENTE_ID = "docenteId";
@@ -40,6 +45,7 @@ public class DetalleController {
     // Rutas de cada microservicio consumidas por este endpoint
     private static final String RUTA_ESTUDIANTE = "/api/estudiantes/%s";
     private static final String RUTA_INSCRIPCIONES_POR_ESTUDIANTE = "/api/inscripciones?estudianteId=%s";
+    private static final String RUTA_INSCRIPCIONES_POR_CURSO = "/api/inscripciones?cursoId=%s";
     private static final String RUTA_CURSO = "/api/materias/cursos/%s";
     private static final String RUTA_DOCENTE = "/api/materias/docentes/%s";
 
@@ -97,6 +103,62 @@ public class DetalleController {
 
         } catch (HttpStatusCodeException ex) {
             // Uno de los módulos respondió con error propio (ej. estudiante no existe)
+            return ResponseEntity.status(ex.getStatusCode()).body(ex.getResponseBodyAsString());
+
+        } catch (ResourceAccessException ex) {
+            // Uno de los módulos no respondió en absoluto
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .body(Map.of("error", "Uno de los módulos no respondió al construir el detalle"));
+
+        } catch (Exception ex) {
+            // Respuesta de un módulo con una forma distinta a la esperada
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "No se pudo componer el detalle: " + ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/api/cursos/{id}/detalle")
+    public ResponseEntity<?> detalleCurso(@PathVariable String id) {
+        try {
+            // 1. Curso — se usa tal cual, no se le agrega nada
+            JsonNode curso = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_CURSO, id));
+
+            // 2. Docente que dicta el curso
+            String docenteId = curso.get(CAMPO_DOCENTE_ID).asText();
+            JsonNode docente = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_DOCENTE, docenteId));
+            ((ObjectNode) curso).set("docente", docente);
+
+            // 3. Inscripciones del curso (puede venir vacía si nadie se ha inscrito)
+            JsonNode respuestaInscripciones = obtenerJson(
+                    rutasConfig.getInscripcionesUrl() + String.format(RUTA_INSCRIPCIONES_POR_CURSO, id));
+
+            JsonNode listaInscripciones = respuestaInscripciones.has(CAMPO_LISTA_INSCRIPCIONES)
+                    ? respuestaInscripciones.get(CAMPO_LISTA_INSCRIPCIONES)
+                    : respuestaInscripciones;
+
+            // 4. Por cada inscripción: el estudiante inscrito
+            ArrayNode estudiantes = mapper.createArrayNode();
+            for (JsonNode inscripcion : listaInscripciones) {
+                String estudianteId = inscripcion.get(CAMPO_ESTUDIANTE_ID).asText();
+                JsonNode estudiante = obtenerJson(
+                        rutasConfig.getEstudiantesUrl() + String.format(RUTA_ESTUDIANTE, estudianteId));
+                estudiantes.add(estudiante);
+            }
+
+            // 5. Ensamblar todo en un solo JSON de respuesta
+            ObjectNode resultado = mapper.createObjectNode();
+            resultado.set("curso", curso);
+            resultado.set("estudiantes", estudiantes);
+
+            // Ver comentario equivalente en detalle(): Jackson 3 no reconoce el
+            // ObjectNode de Jackson 2, así que se aplana a un Map/List comunes.
+            LinkedHashMap<String, Object> resultadoPlano =
+                    mapper.treeToValue(resultado, LinkedHashMap.class);
+
+            return ResponseEntity.ok(resultadoPlano);
+
+        } catch (HttpStatusCodeException ex) {
+            // Uno de los módulos respondió con error propio (ej. curso no existe)
             return ResponseEntity.status(ex.getStatusCode()).body(ex.getResponseBodyAsString());
 
         } catch (ResourceAccessException ex) {
