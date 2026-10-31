@@ -34,7 +34,13 @@
             <artifactId>spring-boot-jackson2</artifactId>
         </dependency>
 
-        <!-- JWT: autenticación básica del Gateway -->
+        <!-- Expone /actuator/health (público) para los health checks del despliegue -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- JWT: validación de los tokens emitidos por el módulo de Autenticación -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
