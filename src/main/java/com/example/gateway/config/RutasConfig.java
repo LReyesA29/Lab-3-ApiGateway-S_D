@@ -20,6 +20,9 @@ public class RutasConfig {
     @Value("${modulos.inscripciones.url}")
     private String inscripcionesUrl;
 
+    @Value("${modulos.autenticacion.url}")
+    private String autenticacionUrl;
+
     public String getEstudiantesUrl() {
         return estudiantesUrl;
     }
@@ -30,5 +33,9 @@ public class RutasConfig {
 
     public String getInscripcionesUrl() {
         return inscripcionesUrl;
+    }
+
+    public String getAutenticacionUrl() {
+        return autenticacionUrl;
     }
 }

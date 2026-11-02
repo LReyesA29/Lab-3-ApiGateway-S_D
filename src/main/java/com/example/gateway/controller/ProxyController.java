@@ -17,7 +17,6 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Reenvía cada petición al microservicio correspondiente según el prefijo de la
@@ -49,20 +48,31 @@ public class ProxyController {
         return reenviar(request, rutasConfig.getInscripcionesUrl());
     }
 
+    // El login lo resuelve el módulo de Autenticación, que es quien emite los JWT
+    @RequestMapping("/api/auth/**")
+    public ResponseEntity<String> proxyAutenticacion(HttpServletRequest request) {
+        return reenviar(request, rutasConfig.getAutenticacionUrl());
+    }
+
     private ResponseEntity<String> reenviar(HttpServletRequest request, String urlBase) {
         String destino = urlBase + request.getRequestURI()
                 + (request.getQueryString() != null ? "?" + request.getQueryString() : "");
         HttpMethod metodo = HttpMethod.valueOf(request.getMethod());
 
         try {
-            String cuerpo = null;
+            // Bytes sin transformar: un multipart/form-data (subida de archivos) se
+            // corrompería si se leyera como texto UTF-8
+            byte[] cuerpo = null;
             if (metodo == HttpMethod.POST || metodo == HttpMethod.PUT || metodo == HttpMethod.PATCH) {
-                cuerpo = StreamUtils.copyToString(request.getInputStream(), StandardCharsets.UTF_8);
+                cuerpo = StreamUtils.copyToByteArray(request.getInputStream());
             }
 
+            // Se conserva el Content-Type original (incluye el boundary del multipart)
             HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<String> entidad = new HttpEntity<>(cuerpo, headers);
+            headers.setContentType(request.getContentType() != null
+                    ? MediaType.parseMediaType(request.getContentType())
+                    : MediaType.APPLICATION_JSON);
+            HttpEntity<byte[]> entidad = new HttpEntity<>(cuerpo, headers);
 
             ResponseEntity<String> respuesta = restTemplate.exchange(destino, metodo, entidad, String.class);
 
