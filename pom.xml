@@ -40,6 +40,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Caché compartido en Redis (ElastiCache en AWS) para el catálogo de Materias -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- JWT: validación de los tokens emitidos por el módulo de Autenticación -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

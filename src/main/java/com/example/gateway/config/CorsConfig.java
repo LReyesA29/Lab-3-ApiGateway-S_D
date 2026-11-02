@@ -31,6 +31,8 @@ public class CorsConfig implements WebMvcConfigurer {
 
     static final List<String> METODOS_PERMITIDOS = List.of("GET", "POST", "PUT", "DELETE", "OPTIONS");
     static final List<String> CABECERAS_PERMITIDAS = List.of("Authorization", "Content-Type", "Accept");
+    // Cabeceras de respuesta que el JavaScript del frontend puede leer (diagnóstico del caché)
+    static final List<String> CABECERAS_EXPUESTAS = List.of("X-Cache");
     // El navegador guarda en caché la respuesta del preflight durante este tiempo
     private static final long MAX_AGE_SEGUNDOS = 3600;
 
@@ -59,6 +61,7 @@ public class CorsConfig implements WebMvcConfigurer {
         config.setAllowedOrigins(permitidos);
         config.setAllowedMethods(METODOS_PERMITIDOS);
         config.setAllowedHeaders(CABECERAS_PERMITIDAS);
+        config.setExposedHeaders(CABECERAS_EXPUESTAS);
         config.setMaxAge(MAX_AGE_SEGUNDOS);
         return config;
     }
@@ -70,6 +73,7 @@ public class CorsConfig implements WebMvcConfigurer {
                 .allowedOrigins(configuracion.getAllowedOrigins().toArray(String[]::new))
                 .allowedMethods(METODOS_PERMITIDOS.toArray(String[]::new))
                 .allowedHeaders(CABECERAS_PERMITIDAS.toArray(String[]::new))
+                .exposedHeaders(CABECERAS_EXPUESTAS.toArray(String[]::new))
                 .maxAge(MAX_AGE_SEGUNDOS);
     }
 

@@ -69,6 +69,11 @@ que firma el módulo de Autenticación (mínimo 32 caracteres).
 | `MATERIAS_URL` | URL del módulo Materias |
 | `INSCRIPCIONES_URL` | URL del módulo Inscripciones |
 | `AUTENTICACION_URL` | URL del módulo de Autenticación |
+| `REDIS_HOST` / `REDIS_PORT` | Redis del caché (opcional; por defecto `localhost:6379`). En AWS, el endpoint de ElastiCache |
+| `REDIS_PASSWORD` | Token de autenticación de Redis (secreto; vacío si no tiene) |
+| `REDIS_SSL` | `true` si Redis tiene cifrado en tránsito (ElastiCache con TLS) |
+| `CACHE_TTL_SEGUNDOS` | Tiempo de vida de cada respuesta cacheada (por defecto 120) |
+| `CACHE_HABILITADO` | `false` apaga el caché sin cambiar código (por defecto `true`) |
 
 Para desarrollo local, el perfil `local` (`application-local.properties`)
 apunta las URLs a `localhost:3001-3004` y `FRONTEND_URL` a `http://localhost:4200`;
@@ -353,6 +358,50 @@ curso, muestra quién lo dicta y quién está inscrito.
 | El curso no existe | El código y cuerpo que devuelva el módulo Materias (normalmente 404) |
 | Un microservicio no responde | `502 Bad Gateway` |
 | La respuesta de un microservicio no tiene la forma esperada | `500 Internal Server Error` |
+
+## Caché (Redis)
+
+El Gateway cachea en Redis las lecturas del catálogo de Materias. En AWS se usa
+ElastiCache, accesible solo desde el Gateway; en local, un Redis en Docker:
+
+```bash
+docker run -d --name redis-local -p 6379:6379 redis:7-alpine
+```
+
+**Patrón cache-aside** (`ProxyController` + `cache/CacheRespuestas`):
+
+1. Un `GET /api/materias/...` busca primero en Redis.
+2. Si está (**HIT**), responde sin llamar al módulo.
+3. Si no está (**MISS**), consulta al módulo y guarda la respuesta 200 con un TTL
+   (`CACHE_TTL_SEGUNDOS`, 120 s por defecto). Los errores no se guardan.
+
+**Clave:** `gw:cache:materias:v{version}:{ruta}?{parámetros ordenados}`. Incluye la
+ruta y todos los parámetros de paginación, orden y filtros (ordenados, para que
+`?a=1&b=2` y `?b=2&a=1` compartan entrada) y una versión.
+
+**Invalidación:** cualquier `POST`, `PUT`, `PATCH` o `DELETE` exitoso sobre
+`/api/materias/**` incrementa `gw:cache:materias:version`. Desde ese momento las
+lecturas usan claves nuevas (MISS) y las viejas vencen solas por su TTL. Se
+invalida todo el catálogo de Materias porque una materia, sus cursos y sus
+docentes se consultan juntos.
+
+**Qué no se cachea:** Inscripciones (los cupos cambian con cada inscripción; un
+cupo viejo permitiría inscribir en un curso lleno), las escrituras y las
+respuestas de error.
+
+**Cabecera de diagnóstico:** las respuestas de Materias traen `X-Cache: HIT` o
+`X-Cache: MISS` (expuesta por CORS para el frontend). Con la cabecera de petición
+`X-Cache-Bypass: true` se salta el caché (`X-Cache: BYPASS`); sirve para medir
+tiempos sin caché. Solo la respeta un ADMIN: si la envía otro rol, se ignora y la
+petición pasa por el caché normal.
+
+**Si Redis no está disponible:** las peticiones siguen respondiendo, solo que
+como MISS (más lento). Los tiempos de espera a Redis son cortos (500 ms) y,
+después de un fallo, el Gateway deja de intentarlo por 30 s. El health check no
+depende de Redis (`management.health.redis.enabled=false`).
+
+**Estadísticas** (solo ADMIN): `GET /api/cache/estadisticas` devuelve aciertos,
+fallos y hit ratio desde que arrancó la instancia; `DELETE` las reinicia.
 
 ## Decisiones de diseño
 
