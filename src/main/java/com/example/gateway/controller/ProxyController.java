@@ -1,6 +1,9 @@
 package com.example.gateway.controller;
 
+import com.example.gateway.cache.CacheRespuestas;
 import com.example.gateway.config.RutasConfig;
+import com.example.gateway.security.JwtAuthenticationFilter;
+import com.example.gateway.security.PoliticaAcceso;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
@@ -17,6 +20,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Reenvía cada petición al microservicio correspondiente según el prefijo de la
@@ -28,8 +32,18 @@ import java.io.IOException;
 @RestController
 public class ProxyController {
 
+    // Recurso cacheado (catálogo de Materias) y cabeceras del caché
+    private static final String RECURSO_MATERIAS = "materias";
+    private static final String CABECERA_CACHE = "X-Cache";
+    // Solo para medir "sin caché": salta Redis y va directo al módulo. Solo se
+    // respeta si la envía un ADMIN; con cualquier otro rol se ignora
+    private static final String CABECERA_SALTAR_CACHE = "X-Cache-Bypass";
+
     @Autowired
     private RutasConfig rutasConfig;
+
+    @Autowired
+    private CacheRespuestas cache;
 
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -38,11 +52,27 @@ public class ProxyController {
         return reenviar(request, rutasConfig.getEstudiantesUrl());
     }
 
+    /**
+     * Catálogo de Materias con caché (cache-aside): las lecturas GET pasan por
+     * Redis y cualquier escritura exitosa (POST, PUT, PATCH, DELETE) lo invalida.
+     */
     @RequestMapping("/api/materias/**")
     public ResponseEntity<String> proxyMaterias(HttpServletRequest request) {
-        return reenviar(request, rutasConfig.getMateriasUrl());
+        String urlBase = rutasConfig.getMateriasUrl();
+
+        if (HttpMethod.GET.matches(request.getMethod())) {
+            return leerConCache(request, urlBase);
+        }
+
+        ResponseEntity<String> respuesta = reenviar(request, urlBase);
+        if (respuesta.getStatusCode().is2xxSuccessful()) {
+            cache.invalidar(RECURSO_MATERIAS);
+        }
+        return respuesta;
     }
 
+    // Inscripciones NO se cachea: los cupos cambian con cada inscripción y un
+    // dato viejo permitiría inscribir en un curso que ya está lleno
     @RequestMapping("/api/inscripciones/**")
     public ResponseEntity<String> proxyInscripciones(HttpServletRequest request) {
         return reenviar(request, rutasConfig.getInscripcionesUrl());
@@ -52,6 +82,48 @@ public class ProxyController {
     @RequestMapping("/api/auth/**")
     public ResponseEntity<String> proxyAutenticacion(HttpServletRequest request) {
         return reenviar(request, rutasConfig.getAutenticacionUrl());
+    }
+
+    private ResponseEntity<String> leerConCache(HttpServletRequest request, String urlBase) {
+        if (pideSaltarCache(request)) {
+            return conCabecera(reenviar(request, urlBase), "BYPASS");
+        }
+
+        // La clave se arma antes de ir al módulo (ver CacheRespuestas.claveDe)
+        Optional<String> clave = cache.claveDe(RECURSO_MATERIAS, request.getRequestURI(), request.getQueryString());
+        if (clave.isPresent()) {
+            Optional<String> guardado = cache.leer(clave.get());
+            if (guardado.isPresent()) {
+                return ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(CABECERA_CACHE, "HIT")
+                        .body(guardado.get());
+            }
+        }
+
+        ResponseEntity<String> respuesta = reenviar(request, urlBase);
+        // Solo se guardan respuestas 200 con cuerpo: los errores (404, 502...) no se cachean
+        if (clave.isPresent() && respuesta.getStatusCode().value() == 200 && respuesta.getBody() != null) {
+            cache.guardar(clave.get(), respuesta.getBody());
+        }
+        return conCabecera(respuesta, "MISS");
+    }
+
+    /**
+     * El bypass solo lo puede usar un ADMIN. El rol lo deja JwtAuthenticationFilter
+     * como atributo de la petición después de validar el token, así que no se
+     * puede falsificar con una cabecera.
+     */
+    static boolean pideSaltarCache(HttpServletRequest request) {
+        return "true".equalsIgnoreCase(request.getHeader(CABECERA_SALTAR_CACHE))
+                && PoliticaAcceso.ROL_ADMIN.equals(request.getAttribute(JwtAuthenticationFilter.ATRIBUTO_ROL));
+    }
+
+    private ResponseEntity<String> conCabecera(ResponseEntity<String> respuesta, String valorCache) {
+        return ResponseEntity.status(respuesta.getStatusCode())
+                .headers(respuesta.getHeaders())
+                .header(CABECERA_CACHE, valorCache)
+                .body(respuesta.getBody());
     }
 
     private ResponseEntity<String> reenviar(HttpServletRequest request, String urlBase) {
