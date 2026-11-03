@@ -31,8 +31,9 @@ public class CorsConfig implements WebMvcConfigurer {
 
     static final List<String> METODOS_PERMITIDOS = List.of("GET", "POST", "PUT", "DELETE", "OPTIONS");
     static final List<String> CABECERAS_PERMITIDAS = List.of("Authorization", "Content-Type", "Accept");
-    // Cabeceras de respuesta que el JavaScript del frontend puede leer (diagnóstico del caché)
-    static final List<String> CABECERAS_EXPUESTAS = List.of("X-Cache");
+    // Cabeceras de respuesta que el JavaScript del frontend puede leer (diagnóstico del caché;
+    // X-Cache-Gateway es la copia que sobrevive a CloudFront)
+    static final List<String> CABECERAS_EXPUESTAS = List.of("X-Cache", "X-Cache-Gateway");
     // El navegador guarda en caché la respuesta del preflight durante este tiempo
     private static final long MAX_AGE_SEGUNDOS = 3600;
 

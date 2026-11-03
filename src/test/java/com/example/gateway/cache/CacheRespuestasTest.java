@@ -96,4 +96,19 @@ class CacheRespuestasTest {
         verify(valores, never()).get(anyString());
         verify(valores, never()).increment(any());
     }
+
+    @Test
+    void elAvisoNombraLaCausaMasInterna() {
+        RuntimeException fallo = new RedisConnectionFailureException("Unable to connect to Redis",
+                new IllegalStateException("Unable to connect to master:6379",
+                        new java.util.concurrent.TimeoutException("Connection initialization timed out after 500 millisecond(s)")));
+
+        assertEquals("TimeoutException: Connection initialization timed out after 500 millisecond(s)",
+                CacheRespuestas.causaDeFondo(fallo));
+    }
+
+    @Test
+    void sinCausaInternaLoDice() {
+        assertEquals("sin causa adicional", CacheRespuestas.causaDeFondo(new IllegalStateException("Redis caído")));
+    }
 }

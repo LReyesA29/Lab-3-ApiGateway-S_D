@@ -35,6 +35,10 @@ public class ProxyController {
     // Recurso cacheado (catálogo de Materias) y cabeceras del caché
     private static final String RECURSO_MATERIAS = "materias";
     private static final String CABECERA_CACHE = "X-Cache";
+    // Copia de X-Cache con otro nombre: detrás de CloudFront el cliente nunca ve
+    // X-Cache, porque CloudFront usa ese mismo nombre para su propio caché y la
+    // reemplaza ("Miss from cloudfront"). Esta copia la deja pasar intacta
+    static final String CABECERA_CACHE_GATEWAY = "X-Cache-Gateway";
     // Solo para medir "sin caché": salta Redis y va directo al módulo. Solo se
     // respeta si la envía un ADMIN; con cualquier otro rol se ignora
     private static final String CABECERA_SALTAR_CACHE = "X-Cache-Bypass";
@@ -94,10 +98,9 @@ public class ProxyController {
         if (clave.isPresent()) {
             Optional<String> guardado = cache.leer(clave.get());
             if (guardado.isPresent()) {
-                return ResponseEntity.ok()
+                return conCabecera(ResponseEntity.ok()
                         .contentType(MediaType.APPLICATION_JSON)
-                        .header(CABECERA_CACHE, "HIT")
-                        .body(guardado.get());
+                        .body(guardado.get()), "HIT");
             }
         }
 
@@ -119,10 +122,12 @@ public class ProxyController {
                 && PoliticaAcceso.ROL_ADMIN.equals(request.getAttribute(JwtAuthenticationFilter.ATRIBUTO_ROL));
     }
 
-    private ResponseEntity<String> conCabecera(ResponseEntity<String> respuesta, String valorCache) {
+    /** Agrega el resultado del caché (HIT, MISS o BYPASS) en X-Cache y en su copia X-Cache-Gateway. */
+    static ResponseEntity<String> conCabecera(ResponseEntity<String> respuesta, String valorCache) {
         return ResponseEntity.status(respuesta.getStatusCode())
                 .headers(respuesta.getHeaders())
                 .header(CABECERA_CACHE, valorCache)
+                .header(CABECERA_CACHE_GATEWAY, valorCache)
                 .body(respuesta.getBody());
     }
 

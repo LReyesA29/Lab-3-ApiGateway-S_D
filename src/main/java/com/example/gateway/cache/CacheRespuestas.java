@@ -167,7 +167,19 @@ public class CacheRespuestas {
     private void registrarError(String operacion, RuntimeException ex) {
         erroresRedis.incrementAndGet();
         enPausaHasta = System.currentTimeMillis() + PAUSA_TRAS_FALLO_MS;
-        log.warn("Redis no disponible al {} ({}). El Gateway sigue sin caché durante {} s",
-                operacion, ex.getMessage(), PAUSA_TRAS_FALLO_MS / 1000);
+        log.warn("Redis no disponible al {} ({}; causa: {}). El Gateway sigue sin caché durante {} s",
+                operacion, ex.getMessage(), causaDeFondo(ex), PAUSA_TRAS_FALLO_MS / 1000);
+    }
+
+    /**
+     * La excepción más interna (red, TLS, contraseña o tiempo de espera). El mensaje
+     * de afuera ("Unable to connect to Redis") es el mismo para todas esas fallas.
+     */
+    static String causaDeFondo(Throwable ex) {
+        Throwable causa = ex;
+        while (causa.getCause() != null && causa.getCause() != causa) {
+            causa = causa.getCause();
+        }
+        return causa == ex ? "sin causa adicional" : causa.getClass().getSimpleName() + ": " + causa.getMessage();
     }
 }
