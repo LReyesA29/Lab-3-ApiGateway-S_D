@@ -390,14 +390,18 @@ cupo viejo permitiría inscribir en un curso lleno), las escrituras y las
 respuestas de error.
 
 **Cabecera de diagnóstico:** las respuestas de Materias traen `X-Cache: HIT` o
-`X-Cache: MISS` (expuesta por CORS para el frontend). Con la cabecera de petición
-`X-Cache-Bypass: true` se salta el caché (`X-Cache: BYPASS`); sirve para medir
-tiempos sin caché. Solo la respeta un ADMIN: si la envía otro rol, se ignora y la
+`X-Cache: MISS` y la misma información en `X-Cache-Gateway` (las dos expuestas por
+CORS para el frontend). La copia existe por el despliegue en AWS: detrás de
+CloudFront el cliente nunca ve `X-Cache`, porque CloudFront usa ese nombre para su
+propio caché y la reemplaza (`Miss from cloudfront`); `X-Cache-Gateway` pasa
+intacta. Con la cabecera de petición `X-Cache-Bypass: true` se salta el caché
+(`X-Cache: BYPASS`); sirve para medir tiempos sin caché. Solo la respeta un ADMIN: si la envía otro rol, se ignora y la
 petición pasa por el caché normal.
 
 **Si Redis no está disponible:** las peticiones siguen respondiendo, solo que
-como MISS (más lento). Los tiempos de espera a Redis son cortos (500 ms) y,
-después de un fallo, el Gateway deja de intentarlo por 30 s. El health check no
+como MISS (más lento). Los tiempos de espera a Redis son cortos (2 s, que
+alcanzan para la primera conexión con TLS y clave) y, después de un fallo, el
+Gateway deja de intentarlo por 30 s; el aviso en el log incluye la causa de fondo. El health check no
 depende de Redis (`management.health.redis.enabled=false`).
 
 **Estadísticas** (solo ADMIN): `GET /api/cache/estadisticas` devuelve aciertos,
