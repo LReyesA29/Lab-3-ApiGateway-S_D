@@ -95,6 +95,37 @@ class CorsConfigTest {
     }
 
     @Test
+    void preflightAceptaIdempotencyKeyEnElPostDeInscripciones() throws Exception {
+        MockHttpServletRequest request = peticion("OPTIONS", "/api/inscripciones", FRONTEND);
+        request.addHeader("Access-Control-Request-Method", "POST");
+        request.addHeader("Access-Control-Request-Headers", "authorization, content-type, idempotency-key");
+        AtomicBoolean controlador = new AtomicBoolean();
+        MockHttpServletResponse response = ejecutar(request, controlador);
+
+        assertEquals(200, response.getStatus());
+        assertEquals(FRONTEND, response.getHeader("Access-Control-Allow-Origin"));
+        assertTrue(response.getHeader("Access-Control-Allow-Headers").toLowerCase().contains("idempotency-key"));
+        assertFalse(controlador.get());
+    }
+
+    @Test
+    void preflightConUnaCabeceraNoPermitidaSeRechaza() throws Exception {
+        MockHttpServletRequest request = peticion("OPTIONS", "/api/inscripciones", FRONTEND);
+        request.addHeader("Access-Control-Request-Method", "POST");
+        request.addHeader("Access-Control-Request-Headers", "x-cabecera-desconocida");
+        assertEquals(403, ejecutar(request, new AtomicBoolean()).getStatus());
+    }
+
+    @Test
+    void laRespuestaExponeIdempotentReplayedAlFrontend() throws Exception {
+        MockHttpServletRequest request = peticion("POST", "/api/inscripciones", FRONTEND);
+        request.addHeader("Authorization", "Bearer " + token("ADMIN"));
+        MockHttpServletResponse response = ejecutar(request, new AtomicBoolean());
+
+        assertTrue(response.getHeader("Access-Control-Expose-Headers").contains("Idempotent-Replayed"));
+    }
+
+    @Test
     void preflightDeOtroOrigenSeRechaza() throws Exception {
         MockHttpServletResponse response = ejecutar(preflight("https://sitio-malicioso.com", "GET"), new AtomicBoolean());
         assertEquals(403, response.getStatus());

@@ -30,10 +30,13 @@ import java.util.List;
 public class CorsConfig implements WebMvcConfigurer {
 
     static final List<String> METODOS_PERMITIDOS = List.of("GET", "POST", "PUT", "DELETE", "OPTIONS");
-    static final List<String> CABECERAS_PERMITIDAS = List.of("Authorization", "Content-Type", "Accept");
+    static final List<String> CABECERAS_PERMITIDAS = List.of("Authorization", "Content-Type", "Accept",
+            // El frontend la envía en POST /api/inscripciones para que un reintento no inscriba dos veces
+            "Idempotency-Key");
     // Cabeceras de respuesta que el JavaScript del frontend puede leer (diagnóstico del caché;
-    // X-Cache-Gateway es la copia que sobrevive a CloudFront)
-    static final List<String> CABECERAS_EXPUESTAS = List.of("X-Cache", "X-Cache-Gateway");
+    // X-Cache-Gateway es la copia que sobrevive a CloudFront; Idempotent-Replayed indica que
+    // Inscripciones repitió el resultado de una petición anterior con la misma Idempotency-Key)
+    static final List<String> CABECERAS_EXPUESTAS = List.of("X-Cache", "X-Cache-Gateway", "Idempotent-Replayed");
     // El navegador guarda en caché la respuesta del preflight durante este tiempo
     private static final long MAX_AGE_SEGUNDOS = 3600;
 
