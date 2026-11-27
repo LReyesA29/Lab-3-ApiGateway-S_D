@@ -20,6 +20,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -43,13 +44,30 @@ public class ProxyController {
     // respeta si la envía un ADMIN; con cualquier otro rol se ignora
     private static final String CABECERA_SALTAR_CACHE = "X-Cache-Bypass";
 
-    @Autowired
-    private RutasConfig rutasConfig;
+    // Cabeceras de la petición del cliente que se reenvían tal cual al módulo
+    // (además del Content-Type). Para propagar otra, p. ej. X-Trace-Id, basta con
+    // agregarla aquí
+    static final List<String> CABECERAS_REENVIADAS = List.of("Idempotency-Key");
+    // Cabeceras de la respuesta del módulo que se devuelven al cliente.
+    // Idempotent-Replayed: el módulo indica que respondió con el resultado guardado
+    // de una petición anterior con la misma Idempotency-Key
+    static final List<String> CABECERAS_DEVUELTAS = List.of("Idempotent-Replayed");
+
+    private final RutasConfig rutasConfig;
+    private final CacheRespuestas cache;
+    private final RestTemplate restTemplate;
 
     @Autowired
-    private CacheRespuestas cache;
+    public ProxyController(RutasConfig rutasConfig, CacheRespuestas cache) {
+        this(rutasConfig, cache, new RestTemplate());
+    }
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    // Para las pruebas: permite simular los módulos con MockRestServiceServer
+    ProxyController(RutasConfig rutasConfig, CacheRespuestas cache, RestTemplate restTemplate) {
+        this.rutasConfig = rutasConfig;
+        this.cache = cache;
+        this.restTemplate = restTemplate;
+    }
 
     @RequestMapping("/api/estudiantes/**")
     public ResponseEntity<String> proxyEstudiantes(HttpServletRequest request) {
@@ -75,11 +93,24 @@ public class ProxyController {
         return respuesta;
     }
 
-    // Inscripciones NO se cachea: los cupos cambian con cada inscripción y un
-    // dato viejo permitiría inscribir en un curso que ya está lleno
+    /**
+     * Inscripciones NO se cachea: los cupos cambian con cada inscripción y un
+     * dato viejo permitiría inscribir en un curso que ya está lleno.
+     * <p>
+     * Una escritura exitosa (inscribir, cancelar...) cambia cupoDisponible del
+     * curso en Materias, así que invalida el caché de Materias. Cuando el módulo
+     * responde 2xx ya hizo commit, de modo que la invalidación ocurre después del
+     * commit: una lectura posterior no puede volver a guardar el cupo anterior.
+     * Si Redis falla al invalidar, CacheRespuestas lo deja en el log y el TTL
+     * acota el tiempo con el cupo viejo.
+     */
     @RequestMapping("/api/inscripciones/**")
     public ResponseEntity<String> proxyInscripciones(HttpServletRequest request) {
-        return reenviar(request, rutasConfig.getInscripcionesUrl());
+        ResponseEntity<String> respuesta = reenviar(request, rutasConfig.getInscripcionesUrl());
+        if (!HttpMethod.GET.matches(request.getMethod()) && respuesta.getStatusCode().is2xxSuccessful()) {
+            cache.invalidar(RECURSO_MATERIAS);
+        }
+        return respuesta;
     }
 
     // El login lo resuelve el módulo de Autenticación, que es quien emite los JWT
@@ -149,11 +180,18 @@ public class ProxyController {
             headers.setContentType(request.getContentType() != null
                     ? MediaType.parseMediaType(request.getContentType())
                     : MediaType.APPLICATION_JSON);
+            for (String nombre : CABECERAS_REENVIADAS) {
+                String valor = request.getHeader(nombre);
+                if (valor != null) {
+                    headers.set(nombre, valor);
+                }
+            }
             HttpEntity<byte[]> entidad = new HttpEntity<>(cuerpo, headers);
 
             ResponseEntity<String> respuesta = restTemplate.exchange(destino, metodo, entidad, String.class);
 
             return ResponseEntity.status(respuesta.getStatusCode())
+                    .headers(cabecerasDevueltas(respuesta.getHeaders()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(respuesta.getBody());
 
@@ -161,6 +199,7 @@ public class ProxyController {
             // El módulo SÍ respondió, pero con un error propio (404, 400, 409...).
             // Eso no es una caída del módulo — se reenvía tal cual, sin tocarlo.
             return ResponseEntity.status(ex.getStatusCode())
+                    .headers(cabecerasDevueltas(ex.getResponseHeaders()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(ex.getResponseBodyAsString());
 
@@ -171,5 +210,20 @@ public class ProxyController {
                     .contentType(MediaType.APPLICATION_JSON)
                     .body("{\"error\": \"Servicio no disponible: " + urlBase + "\"}");
         }
+    }
+
+    /** Solo las cabeceras de CABECERAS_DEVUELTAS que trae la respuesta del módulo. */
+    private static HttpHeaders cabecerasDevueltas(HttpHeaders delModulo) {
+        HttpHeaders devueltas = new HttpHeaders();
+        if (delModulo == null) {
+            return devueltas;
+        }
+        for (String nombre : CABECERAS_DEVUELTAS) {
+            List<String> valores = delModulo.get(nombre);
+            if (valores != null) {
+                devueltas.put(nombre, valores);
+            }
+        }
+        return devueltas;
     }
 }

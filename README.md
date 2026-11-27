@@ -154,7 +154,8 @@ desde otro origen. El único origen permitido es el de `FRONTEND_URL`.
 |---|---|
 | Orígenes | `FRONTEND_URL` (obligatoria) |
 | Métodos | `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS` |
-| Cabeceras | `Authorization`, `Content-Type`, `Accept` |
+| Cabeceras | `Authorization`, `Content-Type`, `Accept`, `Idempotency-Key` |
+| Cabeceras expuestas | `X-Cache`, `X-Cache-Gateway`, `Idempotent-Replayed` |
 | Caché del preflight | 1 hora (`Access-Control-Max-Age: 3600`) |
 
 La configuración se aplica con un `WebMvcConfigurer` y con un `CorsFilter` de máxima
@@ -187,6 +188,15 @@ original, de modo que las subidas `multipart/form-data` (fotografía del
 estudiante, contenido temático) llegan intactas. El Gateway no procesa el
 multipart (`spring.servlet.multipart.enabled=false`): los límites de tamaño y
 formato los aplica cada microservicio.
+
+**Cabeceras propagadas.** Además del `Content-Type`, el Gateway reenvía al módulo
+las cabeceras de la lista `CABECERAS_REENVIADAS` de `ProxyController` (hoy
+`Idempotency-Key`, que el frontend envía en `POST /api/inscripciones` para que un
+reintento no inscriba dos veces) y devuelve al cliente las de
+`CABECERAS_DEVUELTAS` (hoy `Idempotent-Replayed`, con la que Inscripciones avisa
+que repitió el resultado guardado de esa clave). Para propagar otra cabecera
+(p. ej. `X-Trace-Id`) basta con agregarla a la lista correspondiente y, si la
+envía o lee el navegador, a `CorsConfig`.
 
 Si el microservicio responde con un error propio (400, 404, 409, 413, etc.), ese mismo
 código y cuerpo se devuelven sin modificar. Si el microservicio no responde
@@ -388,6 +398,30 @@ docentes se consultan juntos.
 **Qué no se cachea:** Inscripciones (los cupos cambian con cada inscripción; un
 cupo viejo permitiría inscribir en un curso lleno), las escrituras y las
 respuestas de error.
+
+**Inscripciones invalida el caché de Materias.** Cada curso tiene
+`cupoDisponible`, que Inscripciones descuenta (o devuelve) en Materias al
+inscribir o cancelar. Por eso cualquier `POST`, `PUT`, `PATCH` o `DELETE` sobre
+`/api/inscripciones/**` que responda 2xx también incrementa
+`gw:cache:materias:version`. Cuando el módulo responde ya hizo commit, así que la
+invalidación ocurre después del commit y una lectura posterior no puede volver a
+guardar el cupo anterior. Un `409` (sin cupo, duplicado), cualquier otro error o
+un `502` no invalidan, porque no cambió nada.
+
+**Qué es consistente y qué es eventual:**
+
+| Dato | Consistencia |
+|---|---|
+| Inscripciones (crear, cancelar, listar) | Inmediata: no pasa por el caché |
+| Validación de cupo al inscribir | Inmediata: la hace Inscripciones contra Materias, nunca contra Redis |
+| Reintento con la misma `Idempotency-Key` | Inmediata: lo resuelve Inscripciones (`Idempotent-Replayed`) |
+| `cupoDisponible` y demás datos leídos con `GET /api/materias/**` | Inmediata en el caso normal (invalidación tras cada escritura exitosa); **eventual**, como máximo `CACHE_TTL_SEGUNDOS`, si Redis falla al invalidar |
+| Cambios hechos en Materias sin pasar por el Gateway (p. ej. una compensación manual con `liberar-cupo`, o un `5xx` de Inscripciones tras descontar el cupo) | **Eventual**, como máximo `CACHE_TTL_SEGUNDOS` |
+
+Si Redis falla al invalidar, el aviso queda en el log (`Redis no disponible al
+invalidar materias`) y la respuesta al cliente no cambia. El cupo que muestra el
+catálogo puede quedar desactualizado hasta que venza el TTL, pero eso no permite
+sobreinscribir: la decisión la toma Inscripciones con el cupo real.
 
 **Cabecera de diagnóstico:** las respuestas de Materias traen `X-Cache: HIT` o
 `X-Cache: MISS` y la misma información en `X-Cache-Gateway` (las dos expuestas por
