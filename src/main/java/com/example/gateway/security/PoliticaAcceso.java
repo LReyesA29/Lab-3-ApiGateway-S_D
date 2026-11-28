@@ -12,7 +12,14 @@ import java.util.List;
  * Reglas de autorización (RBAC) del Gateway:
  * - Rutas públicas: login y salud, sin token.
  * - ADMIN: cualquier método sobre cualquier ruta.
- * - ESTUDIANTE: solo GET sobre los microservicios y el detalle de estudiante.
+ * - ESTUDIANTE: GET sobre los microservicios y el detalle de estudiante, y además
+ *   inscribirse (POST /api/inscripciones) y cancelar una inscripción
+ *   (DELETE /api/inscripciones/{id}). Cualquier otra escritura es solo de ADMIN.
+ * <p>
+ * Limitación: el Gateway no comprueba que el estudianteId del cuerpo (ni la
+ * inscripción que se cancela) sea del usuario del token, porque las cuentas de
+ * Autenticación no están vinculadas a los estudiantes. Un ESTUDIANTE puede, por
+ * tanto, inscribir o cancelar en nombre de otro estudiante.
  */
 @Component
 public class PoliticaAcceso {
@@ -31,6 +38,11 @@ public class PoliticaAcceso {
             "/api/inscripciones/**",
             "/api/estudiantes/{id}/detalle");
 
+    // Escrituras del ESTUDIANTE: patrones exactos (un solo segmento para el id), de modo
+    // que p. ej. DELETE /api/inscripciones/1/notas o POST /api/inscripciones/lote no entran
+    private static final List<PathPattern> INSCRIBIRSE = compilar("/api/inscripciones");
+    private static final List<PathPattern> CANCELAR_INSCRIPCION = compilar("/api/inscripciones/{id}");
+
     public boolean esPublica(String ruta) {
         return coincide(RUTAS_PUBLICAS, ruta);
     }
@@ -40,7 +52,16 @@ public class PoliticaAcceso {
             return true;
         }
         if (ROL_ESTUDIANTE.equals(rol)) {
-            return HttpMethod.GET.matches(metodo) && coincide(RUTAS_LECTURA_ESTUDIANTE, ruta);
+            if (HttpMethod.GET.matches(metodo)) {
+                return coincide(RUTAS_LECTURA_ESTUDIANTE, ruta);
+            }
+            if (HttpMethod.POST.matches(metodo)) {
+                return coincide(INSCRIBIRSE, ruta);
+            }
+            if (HttpMethod.DELETE.matches(metodo)) {
+                return coincide(CANCELAR_INSCRIPCION, ruta);
+            }
+            return false;
         }
         return false;
     }

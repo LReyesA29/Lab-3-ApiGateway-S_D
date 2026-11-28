@@ -137,7 +137,20 @@ Las reglas viven en `PoliticaAcceso`:
 | `GET /api/estudiantes/**`, `/api/materias/**`, `/api/inscripciones/**` | ❌ | ✅ | ✅ |
 | `GET /api/estudiantes/{id}/detalle` | ❌ | ✅ | ✅ |
 | `GET /api/cursos/{id}/detalle` | ❌ | ❌ | ✅ |
-| `POST` / `PUT` / `PATCH` / `DELETE` sobre cualquier ruta | ❌ | ❌ | ✅ |
+| `POST /api/inscripciones` (inscribirse) | ❌ | ✅ | ✅ |
+| `DELETE /api/inscripciones/{id}` (cancelar una inscripción) | ❌ | ✅ | ✅ |
+| Cualquier otro `POST` / `PUT` / `PATCH` / `DELETE` (p. ej. `PUT /api/inscripciones/{id}`, `POST /api/materias`, `POST /api/estudiantes`) | ❌ | ❌ | ✅ |
+
+Las dos escrituras del ESTUDIANTE son rutas exactas: `DELETE /api/inscripciones/{id}`
+admite un solo segmento después de `/api/inscripciones`, así que algo como
+`DELETE /api/inscripciones/1/notas` sigue siendo solo de ADMIN.
+
+> **Limitación:** el Gateway no comprueba que el `estudianteId` del cuerpo de
+> `POST /api/inscripciones` (ni la inscripción que se cancela) pertenezca al usuario
+> del token, porque las cuentas de Autenticación no están vinculadas a los
+> estudiantes. Un ESTUDIANTE autenticado puede inscribir o cancelar en nombre de otro
+> estudiante. El Gateway sí reenvía `X-User-Id` / `X-User-Role` del token, para que el
+> control se pueda agregar en Inscripciones cuando exista ese vínculo.
 
 | Situación | Respuesta |
 |---|---|

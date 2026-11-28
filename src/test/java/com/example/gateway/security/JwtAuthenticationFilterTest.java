@@ -83,9 +83,25 @@ class JwtAuthenticationFilterTest {
     @ParameterizedTest
     @CsvSource({
             "POST, /api/inscripciones",
+            "DELETE, /api/inscripciones/1",
+            "DELETE, /api/inscripciones/6501f8a2c9d4e5f6a7b8c9d0" })
+    void estudiantePuedeInscribirseYCancelar(String metodo, String ruta) throws Exception {
+        assertEquals(200, ejecutar(metodo, ruta, token("ESTUDIANTE", SECRETO, 60_000)).getStatus());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "PUT, /api/inscripciones/1",
+            "PATCH, /api/inscripciones/1",
+            "POST, /api/materias",
+            "POST, /api/materias/cursos",
+            "POST, /api/estudiantes",
+            "POST, /api/inscripciones/1",
+            "DELETE, /api/inscripciones",
+            "DELETE, /api/inscripciones/1/notas",
+            "DELETE, /api/estudiantes/1",
             "PUT, /api/estudiantes/1",
             "PATCH, /api/materias/cursos/1",
-            "DELETE, /api/inscripciones/1",
             "GET, /api/cursos/1/detalle" })
     void estudianteSinPermisoResponde403(String metodo, String ruta) throws Exception {
         assertEquals(403, ejecutar(metodo, ruta, token("ESTUDIANTE", SECRETO, 60_000)).getStatus());
