@@ -1,11 +1,15 @@
 package com.example.gateway.controller;
 
 import com.example.gateway.config.RutasConfig;
+import com.example.gateway.datalake.RegistroPeticionesFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -49,22 +53,31 @@ public class DetalleController {
     private static final String RUTA_CURSO = "/api/materias/cursos/%s";
     private static final String RUTA_DOCENTE = "/api/materias/docentes/%s";
 
-    @Autowired
-    private RutasConfig rutasConfig;
-
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RutasConfig rutasConfig;
+    private final RestTemplate restTemplate;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Autowired
+    public DetalleController(RutasConfig rutasConfig) {
+        this(rutasConfig, new RestTemplate());
+    }
+
+    // Para las pruebas: permite simular los módulos con MockRestServiceServer
+    DetalleController(RutasConfig rutasConfig, RestTemplate restTemplate) {
+        this.rutasConfig = rutasConfig;
+        this.restTemplate = restTemplate;
+    }
+
     @GetMapping("/api/estudiantes/{id}/detalle")
-    public ResponseEntity<?> detalle(@PathVariable String id) {
+    public ResponseEntity<?> detalle(@PathVariable String id, HttpServletRequest request) {
         try {
             // 1. Estudiante — se usa tal cual, no se le agrega nada
             JsonNode estudiante = obtenerJson(
-                    rutasConfig.getEstudiantesUrl() + String.format(RUTA_ESTUDIANTE, id));
+                    rutasConfig.getEstudiantesUrl() + String.format(RUTA_ESTUDIANTE, id), request);
 
             // 2. Inscripciones del estudiante (ya deberían traer sus notas anidadas)
             JsonNode respuestaInscripciones = obtenerJson(
-                    rutasConfig.getInscripcionesUrl() + String.format(RUTA_INSCRIPCIONES_POR_ESTUDIANTE, id));
+                    rutasConfig.getInscripcionesUrl() + String.format(RUTA_INSCRIPCIONES_POR_ESTUDIANTE, id), request);
 
             JsonNode listaInscripciones = (CAMPO_LISTA_INSCRIPCIONES != null
                     && respuestaInscripciones.has(CAMPO_LISTA_INSCRIPCIONES))
@@ -74,10 +87,10 @@ public class DetalleController {
             // 3-4. Por cada inscripción: su curso, y el docente de ese curso
             for (JsonNode inscripcion : listaInscripciones) {
                 String cursoId = inscripcion.get(CAMPO_CURSO_ID).asText();
-                JsonNode curso = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_CURSO, cursoId));
+                JsonNode curso = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_CURSO, cursoId), request);
 
                 String docenteId = curso.get(CAMPO_DOCENTE_ID).asText();
-                JsonNode docente = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_DOCENTE, docenteId));
+                JsonNode docente = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_DOCENTE, docenteId), request);
 
                 ((ObjectNode) curso).set("docente", docente);
                 ((ObjectNode) inscripcion).set("curso", curso);
@@ -102,6 +115,7 @@ public class DetalleController {
             return ResponseEntity.ok(resultadoPlano);
 
         } catch (HttpStatusCodeException ex) {
+            RegistroPeticionesFilter.marcarErrorDelModulo(request, ex.getResponseBodyAsString());
             // Uno de los módulos respondió con error propio (ej. estudiante no existe)
             return ResponseEntity.status(ex.getStatusCode()).body(ex.getResponseBodyAsString());
 
@@ -118,19 +132,19 @@ public class DetalleController {
     }
 
     @GetMapping("/api/cursos/{id}/detalle")
-    public ResponseEntity<?> detalleCurso(@PathVariable String id) {
+    public ResponseEntity<?> detalleCurso(@PathVariable String id, HttpServletRequest request) {
         try {
             // 1. Curso — se usa tal cual, no se le agrega nada
-            JsonNode curso = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_CURSO, id));
+            JsonNode curso = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_CURSO, id), request);
 
             // 2. Docente que dicta el curso
             String docenteId = curso.get(CAMPO_DOCENTE_ID).asText();
-            JsonNode docente = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_DOCENTE, docenteId));
+            JsonNode docente = obtenerJson(rutasConfig.getMateriasUrl() + String.format(RUTA_DOCENTE, docenteId), request);
             ((ObjectNode) curso).set("docente", docente);
 
             // 3. Inscripciones del curso (puede venir vacía si nadie se ha inscrito)
             JsonNode respuestaInscripciones = obtenerJson(
-                    rutasConfig.getInscripcionesUrl() + String.format(RUTA_INSCRIPCIONES_POR_CURSO, id));
+                    rutasConfig.getInscripcionesUrl() + String.format(RUTA_INSCRIPCIONES_POR_CURSO, id), request);
 
             JsonNode listaInscripciones = respuestaInscripciones.has(CAMPO_LISTA_INSCRIPCIONES)
                     ? respuestaInscripciones.get(CAMPO_LISTA_INSCRIPCIONES)
@@ -141,7 +155,7 @@ public class DetalleController {
             for (JsonNode inscripcion : listaInscripciones) {
                 String estudianteId = inscripcion.get(CAMPO_ESTUDIANTE_ID).asText();
                 JsonNode estudiante = obtenerJson(
-                        rutasConfig.getEstudiantesUrl() + String.format(RUTA_ESTUDIANTE, estudianteId));
+                        rutasConfig.getEstudiantesUrl() + String.format(RUTA_ESTUDIANTE, estudianteId), request);
                 estudiantes.add(estudiante);
             }
 
@@ -158,6 +172,7 @@ public class DetalleController {
             return ResponseEntity.ok(resultadoPlano);
 
         } catch (HttpStatusCodeException ex) {
+            RegistroPeticionesFilter.marcarErrorDelModulo(request, ex.getResponseBodyAsString());
             // Uno de los módulos respondió con error propio (ej. curso no existe)
             return ResponseEntity.status(ex.getStatusCode()).body(ex.getResponseBodyAsString());
 
@@ -173,8 +188,13 @@ public class DetalleController {
         }
     }
 
-    private JsonNode obtenerJson(String url) throws Exception {
-        String cuerpo = restTemplate.getForObject(url, String.class);
+    /**
+     * Cada llamada interna lleva las cabeceras de CabecerasInternas (X-Trace-Id de la
+     * petición original, X-User-Id y X-User-Role del token), igual que el proxy.
+     */
+    private JsonNode obtenerJson(String url, HttpServletRequest request) throws Exception {
+        HttpEntity<Void> entidad = new HttpEntity<>(CabecerasInternas.para(request));
+        String cuerpo = restTemplate.exchange(url, HttpMethod.GET, entidad, String.class).getBody();
         return mapper.readTree(cuerpo);
     }
 }

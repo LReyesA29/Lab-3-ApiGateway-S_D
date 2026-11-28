@@ -24,6 +24,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     public static final String ATRIBUTO_USUARIO = "usuario";
     public static final String ATRIBUTO_ROL = "rol";
+    // Id del usuario autenticado (claim "id" del token; si no viene, el claim "usuario").
+    // El Gateway lo reenvía a los módulos en X-User-Id
+    public static final String ATRIBUTO_USUARIO_ID = "usuarioId";
+    private static final String CLAIM_ID = "id";
 
     private static final String PREFIJO_BEARER = "Bearer ";
 
@@ -80,6 +84,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         request.setAttribute(ATRIBUTO_USUARIO, claims.get(ATRIBUTO_USUARIO));
         request.setAttribute(ATRIBUTO_ROL, rolTexto);
+        Object id = claims.get(CLAIM_ID) != null ? claims.get(CLAIM_ID) : claims.get(ATRIBUTO_USUARIO);
+        if (id != null) {
+            request.setAttribute(ATRIBUTO_USUARIO_ID, id.toString());
+        }
         filterChain.doFilter(request, response);
     }
 

@@ -74,6 +74,8 @@ que firma el módulo de Autenticación (mínimo 32 caracteres).
 | `REDIS_SSL` | `true` si Redis tiene cifrado en tránsito (ElastiCache con TLS) |
 | `CACHE_TTL_SEGUNDOS` | Tiempo de vida de cada respuesta cacheada (por defecto 120) |
 | `CACHE_HABILITADO` | `false` apaga el caché sin cambiar código (por defecto `true`) |
+| `LOG_DIR` | Carpeta donde además se guardan las líneas del datalake en archivos `.jsonl` (opcional; sin ella solo van a la salida estándar) |
+| `HOSTNAME` | Nombre de la instancia en el datalake (lo pone Docker/ECS; sin ella, `local`) |
 
 Para desarrollo local, el perfil `local` (`application-local.properties`)
 apunta las URLs a `localhost:3001-3004` y `FRONTEND_URL` a `http://localhost:4200`;
@@ -154,8 +156,8 @@ desde otro origen. El único origen permitido es el de `FRONTEND_URL`.
 |---|---|
 | Orígenes | `FRONTEND_URL` (obligatoria) |
 | Métodos | `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS` |
-| Cabeceras | `Authorization`, `Content-Type`, `Accept`, `Idempotency-Key` |
-| Cabeceras expuestas | `X-Cache`, `X-Cache-Gateway`, `Idempotent-Replayed` |
+| Cabeceras | `Authorization`, `Content-Type`, `Accept`, `Idempotency-Key`, `X-Trace-Id` |
+| Cabeceras expuestas | `X-Cache`, `X-Cache-Gateway`, `Idempotent-Replayed`, `X-Trace-Id` |
 | Caché del preflight | 1 hora (`Access-Control-Max-Age: 3600`) |
 
 La configuración se aplica con un `WebMvcConfigurer` y con un `CorsFilter` de máxima
@@ -189,14 +191,24 @@ estudiante, contenido temático) llegan intactas. El Gateway no procesa el
 multipart (`spring.servlet.multipart.enabled=false`): los límites de tamaño y
 formato los aplica cada microservicio.
 
-**Cabeceras propagadas.** Además del `Content-Type`, el Gateway reenvía al módulo
-las cabeceras de la lista `CABECERAS_REENVIADAS` de `ProxyController` (hoy
-`Idempotency-Key`, que el frontend envía en `POST /api/inscripciones` para que un
-reintento no inscriba dos veces) y devuelve al cliente las de
-`CABECERAS_DEVUELTAS` (hoy `Idempotent-Replayed`, con la que Inscripciones avisa
-que repitió el resultado guardado de esa clave). Para propagar otra cabecera
-(p. ej. `X-Trace-Id`) basta con agregarla a la lista correspondiente y, si la
-envía o lee el navegador, a `CorsConfig`.
+**Cabeceras propagadas.** Además del `Content-Type`, cada llamada del Gateway a un
+módulo (proxy y endpoints de composición) lleva las cabeceras de
+`CabecerasInternas.CABECERAS_REENVIADAS`, único lugar donde se agrega una nueva:
+
+| Cabecera | Valor |
+|---|---|
+| `Idempotency-Key` | La que envió el cliente (`POST /api/inscripciones`, para que un reintento no inscriba dos veces) |
+| `X-Trace-Id` | El trace_id de la petición: el recibido o el que generó el Gateway |
+| `X-User-Id` | Claim `id` del JWT ya validado (si no viene, el claim `usuario`) |
+| `X-User-Role` | Claim `rol` del JWT ya validado |
+
+`X-User-Id` y `X-User-Role` nunca se toman del cliente: si una petición las trae,
+se descartan antes de cualquier otro filtro. Sin token (login), no se envían.
+
+Al cliente se le devuelven las cabeceras de `CABECERAS_DEVUELTAS` de
+`ProxyController` (hoy `Idempotent-Replayed`, con la que Inscripciones avisa que
+repitió el resultado guardado de esa clave). Si una cabecera nueva la envía o la
+lee el navegador, también va en `CorsConfig`.
 
 Si el microservicio responde con un error propio (400, 404, 409, 413, etc.), ese mismo
 código y cuerpo se devuelven sin modificar. Si el microservicio no responde
@@ -440,6 +452,44 @@ depende de Redis (`management.health.redis.enabled=false`).
 
 **Estadísticas** (solo ADMIN): `GET /api/cache/estadisticas` devuelve aciertos,
 fallos y hit ratio desde que arrancó la instancia; `DELETE` las reinicia.
+
+## Datalake de peticiones
+
+Cada petición atendida deja **una** línea JSON compacta en la salida estándar con
+el prefijo `DLK ` (el contrato es el mismo en todos los módulos; un recolector
+aparte las lee y las guarda en Parquet). Si existe `LOG_DIR`, la misma línea, sin
+prefijo, se agrega además a `LOG_DIR/gateway-<instancia>-AAAAMMDD-HH.jsonl` (hora
+UTC; la carpeta se crea si no existe).
+
+```text
+DLK {"ts":"2026-11-28T00:17:04.527Z","service":"gateway","instance":"gw-local-1","trace_id":"front-7c2d9e4b1a","method":"POST","path":"/api/inscripciones","query":null,"status":409,"latency_ms":15,"user_id":"42","role":"ADMIN","idempotency_key":"6f1e2c9a-insc-0001","error_type":"CupoAgotado","request_body":{"estudianteId":3,"cursoId":5}}
+```
+
+| Campo | En el Gateway |
+|---|---|
+| `ts` | Llegada de la petición, UTC con milisegundos |
+| `service` / `instance` | `gateway` / `HOSTNAME` (o `local`) |
+| `trace_id` | `X-Trace-Id` recibido; si no llega (o no es válido: 1-128 caracteres `A-Z a-z 0-9 . _ : -`), 16 hex aleatorios. Se devuelve siempre en `X-Trace-Id` y se propaga a los módulos |
+| `method`, `path`, `query`, `status` | De la petición y la respuesta final (`query` sin `?`, o `null`) |
+| `latency_ms` | Desde que llegó la petición hasta que el Gateway terminó la respuesta |
+| `user_id` / `role` | Del JWT validado (los mismos valores de `X-User-Id` / `X-User-Role`) |
+| `idempotency_key` | Cabecera `Idempotency-Key` o `null` |
+| `error_type` | El `errorType` del cuerpo si un módulo respondió un error que lo trae; si el error es del Gateway: `TokenInvalido` (401), `AccesoDenegado` (403, también CORS), `ModuloNoDisponible` (502). Un error de un módulo sin `errorType` queda en `null` |
+| `request_body` | El JSON recibido; `"<no-json>"` si es multipart u otro tipo; `"<demasiado-grande>"` si supera 16 KB; `"<omitido>"` en todo `/api/auth/**` (login y registro traen contraseñas); `null` sin cuerpo |
+
+**Cómo se implementa** (`datalake/RegistroPeticionesFilter`): es el primer filtro
+(orden más alto), antes del `CorsFilter` y de `JwtAuthenticationFilter`, así que
+también registra los rechazos de CORS y los 401/403. El cuerpo se copia con
+`ContentCachingRequestWrapper` a medida que el proxy lo lee: el módulo sigue
+recibiendo los bytes intactos (subidas de fotografía y PDF) y en memoria solo
+quedan los primeros 16 KB. Las líneas se escriben en un hilo aparte con una cola
+acotada (`EscritorDatalake`): la petición no espera a la consola ni al disco y,
+si algo falla al registrar, la respuesta no cambia (el fallo queda en el log
+normal).
+
+**No se registran** `/health`, `/actuator/**` ni la documentación (`/swagger-ui`,
+`/v3/api-docs`, `/api-docs`); igual llevan `X-Trace-Id`. Los preflight CORS
+(`OPTIONS`) sí se registran, con `method: "OPTIONS"`.
 
 ## Decisiones de diseño
 

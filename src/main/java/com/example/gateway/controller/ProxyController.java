@@ -2,6 +2,7 @@ package com.example.gateway.controller;
 
 import com.example.gateway.cache.CacheRespuestas;
 import com.example.gateway.config.RutasConfig;
+import com.example.gateway.datalake.RegistroPeticionesFilter;
 import com.example.gateway.security.JwtAuthenticationFilter;
 import com.example.gateway.security.PoliticaAcceso;
 import jakarta.servlet.http.HttpServletRequest;
@@ -44,10 +45,9 @@ public class ProxyController {
     // respeta si la envía un ADMIN; con cualquier otro rol se ignora
     private static final String CABECERA_SALTAR_CACHE = "X-Cache-Bypass";
 
-    // Cabeceras de la petición del cliente que se reenvían tal cual al módulo
-    // (además del Content-Type). Para propagar otra, p. ej. X-Trace-Id, basta con
-    // agregarla aquí
-    static final List<String> CABECERAS_REENVIADAS = List.of("Idempotency-Key");
+    // Las cabeceras que se envían al módulo (además del Content-Type) están en
+    // CabecerasInternas.CABECERAS_REENVIADAS, compartida con DetalleController:
+    // Idempotency-Key, X-Trace-Id, X-User-Id y X-User-Role
     // Cabeceras de la respuesta del módulo que se devuelven al cliente.
     // Idempotent-Replayed: el módulo indica que respondió con el resultado guardado
     // de una petición anterior con la misma Idempotency-Key
@@ -176,16 +176,10 @@ public class ProxyController {
             }
 
             // Se conserva el Content-Type original (incluye el boundary del multipart)
-            HttpHeaders headers = new HttpHeaders();
+            HttpHeaders headers = CabecerasInternas.para(request);
             headers.setContentType(request.getContentType() != null
                     ? MediaType.parseMediaType(request.getContentType())
                     : MediaType.APPLICATION_JSON);
-            for (String nombre : CABECERAS_REENVIADAS) {
-                String valor = request.getHeader(nombre);
-                if (valor != null) {
-                    headers.set(nombre, valor);
-                }
-            }
             HttpEntity<byte[]> entidad = new HttpEntity<>(cuerpo, headers);
 
             ResponseEntity<String> respuesta = restTemplate.exchange(destino, metodo, entidad, String.class);
@@ -198,6 +192,8 @@ public class ProxyController {
         } catch (HttpStatusCodeException ex) {
             // El módulo SÍ respondió, pero con un error propio (404, 400, 409...).
             // Eso no es una caída del módulo — se reenvía tal cual, sin tocarlo.
+            // Su errorType (si lo trae) es el error_type de la línea del datalake
+            RegistroPeticionesFilter.marcarErrorDelModulo(request, ex.getResponseBodyAsString());
             return ResponseEntity.status(ex.getStatusCode())
                     .headers(cabecerasDevueltas(ex.getResponseHeaders()))
                     .contentType(MediaType.APPLICATION_JSON)
